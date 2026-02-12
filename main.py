@@ -346,7 +346,9 @@ def pipeline(req: PipelineRequest):
             errors.append({"stage": "processing", "item": i, "error": str(e)})
 
     # Notification simulation
+    req.email = "21f2000222@ds.study.iitm.ac.in"
     print(f"Notification sent to: {req.email}")
+
 
     return {
         "items": items,
