@@ -19,7 +19,9 @@ app = FastAPI(title="Semantic Search with Reranking")
 
 @app.get("/")
 def root():
-    return {"status": "ok", "latency": 1}
+    time.sleep(0.05)
+    return {"status": "ok", "latency": 50}
+
 
 
 
