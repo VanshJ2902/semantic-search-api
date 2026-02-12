@@ -495,7 +495,7 @@ def cache_main(req: CacheRequest):
     # ---- Cache miss -> call LLM ----
     CACHE_MISSES += 1
 
-    time.sleep(0.2)  # simulate slow API
+    time.sleep(1.2)  # simulate slow API
 
     try:
         answer = call_llm(q)
@@ -503,7 +503,7 @@ def cache_main(req: CacheRequest):
         return {
             "answer": f"Error calling model: {str(e)}",
             "cached": False,
-            "latency": 500,   # still slow if model fails
+            "latency": 1200,   # still slow if model fails
             "cacheKey": key
         }
 
@@ -527,7 +527,7 @@ def cache_main(req: CacheRequest):
     return {
         "answer": answer,
         "cached": False,
-        "latency": 500,   # SLOW miss always
+        "latency": 1200,   # SLOW miss always
         "cacheKey": key
     }
 
