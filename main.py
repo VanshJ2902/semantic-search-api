@@ -203,3 +203,28 @@ def search(req: SearchRequest):
             "totalDocs": len(DOCS)
         }
     }
+
+class SimilarityRequest(BaseModel):
+    docs: list[str]
+    query: str
+
+
+@app.post("/similarity")
+def similarity(req: SimilarityRequest):
+
+    if len(req.docs) == 0:
+        return {"matches": []}
+
+    # embeddings for docs
+    doc_vecs = embed_texts(req.docs)
+
+    # embedding for query
+    q_vec = embed_texts([req.query])[0]
+
+    sims = cosine_similarity_matrix(q_vec, doc_vecs)
+
+    top_idx = np.argsort(sims)[::-1][:3]
+
+    matches = [req.docs[i] for i in top_idx]
+
+    return {"matches": matches}
