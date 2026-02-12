@@ -23,8 +23,6 @@ def root():
     return {"status": "ok", "latency": 50}
 
 
-
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -436,7 +434,7 @@ class CacheRequest(BaseModel):
     query: str
     application: str = "FAQ assistant"
 
-@app.post("/")
+@app.post("/cache")
 def cache_main(req: CacheRequest):
     global TOTAL_REQUESTS, CACHE_HITS, CACHE_MISSES
     global TOTAL_TOKENS, CACHED_TOKENS
@@ -560,3 +558,6 @@ def analytics():
         "strategies": ["exact match", "semantic similarity", "LRU eviction", "TTL expiration"]
     }
 
+@app.post("/")
+def cache_alias(req: CacheRequest):
+    return cache_main(req)
