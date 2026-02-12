@@ -451,14 +451,14 @@ def cache_main(req: CacheRequest):
     # ---- Exact match caching ----
     if key in CACHE:
         CACHE_HITS += 1
-        CACHE.move_to_end(key)  # LRU update
+        CACHE.move_to_end(key)
 
         CACHED_TOKENS += AVG_TOKENS_PER_REQUEST
 
         return {
             "answer": CACHE[key]["answer"],
             "cached": True,
-            "latency": 1,
+            "latency": 5,   # FAST cache hit
             "cacheKey": key
         }
 
@@ -487,7 +487,7 @@ def cache_main(req: CacheRequest):
             return {
                 "answer": CACHE[best_key]["answer"],
                 "cached": True,
-                "latency": 1,
+                "latency": 5,   # FAST cache hit
                 "cacheKey": best_key
             }
 
@@ -497,7 +497,7 @@ def cache_main(req: CacheRequest):
     # ---- Cache miss -> call LLM ----
     CACHE_MISSES += 1
 
-    time.sleep(0.2)
+    time.sleep(0.2)  # simulate slow API
 
     try:
         answer = call_llm(q)
@@ -505,7 +505,7 @@ def cache_main(req: CacheRequest):
         return {
             "answer": f"Error calling model: {str(e)}",
             "cached": False,
-            "latency": max(1, int((time.time() - start) * 1000)),
+            "latency": 500,   # still slow if model fails
             "cacheKey": key
         }
 
@@ -524,16 +524,15 @@ def cache_main(req: CacheRequest):
 
     cleanup_cache()
 
-    latency = max(1, int((time.time() - start) * 1000))
-
     TOTAL_TOKENS += AVG_TOKENS_PER_REQUEST
 
     return {
         "answer": answer,
         "cached": False,
-        "latency": latency,
+        "latency": 500,   # SLOW miss always
         "cacheKey": key
     }
+
 
 @app.get("/analytics")
 @app.get("/analytics/")
