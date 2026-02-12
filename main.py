@@ -8,6 +8,9 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
+from datetime import datetime, timezone
+import sqlite3
+
 
 app = FastAPI(title="Semantic Search with Reranking")
 
@@ -34,6 +37,24 @@ load_dotenv()
 
 AIPIPE_API_KEY = os.getenv("AIPIPE_API_KEY")
 AIPIPE_BASE_URL = "https://aipipe.org/openai/v1"
+
+DB_FILE = "pipeline.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS pipeline_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT,
+            raw_content TEXT,
+            analysis TEXT,
+            sentiment TEXT,
+            timestamp TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
 
 
 DOCS = []
@@ -154,6 +175,7 @@ def rerank_with_llm(query, docs):
 
 @app.on_event("startup")
 def startup_event():
+    init_db()
     build_index()
 
 
@@ -228,3 +250,107 @@ def similarity(req: SimilarityRequest):
     matches = [req.docs[i] for i in top_idx]
 
     return {"matches": matches}
+
+class PipelineRequest(BaseModel):
+    email: str
+    source: str
+
+
+def fetch_uuid():
+    url = "https://httpbin.org/uuid"
+    try:
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        return r.json().get("uuid", "")
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def enrich_with_llm(text):
+    url = f"{AIPIPE_BASE_URL}/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {AIPIPE_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    prompt = f"""
+You are an AI analyst.
+
+Given this text:
+{text}
+
+1. Write a concise summary in 1-2 sentences.
+2. Classify sentiment as optimistic, pessimistic, or balanced.
+
+Return ONLY valid JSON like:
+{{"analysis":"...", "sentiment":"optimistic"}}
+"""
+
+    payload = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0
+    }
+
+    resp = requests.post(url, headers=headers, json=payload, timeout=20)
+    resp.raise_for_status()
+
+    content = resp.json()["choices"][0]["message"]["content"].strip()
+    return json.loads(content)
+
+
+def store_result(source, raw, analysis, sentiment, timestamp):
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO pipeline_results (source, raw_content, analysis, sentiment, timestamp)
+        VALUES (?, ?, ?, ?, ?)
+    """, (source, raw, analysis, sentiment, timestamp))
+    conn.commit()
+    conn.close()
+
+
+@app.post("/pipeline")
+def pipeline(req: PipelineRequest):
+    processed_at = datetime.now(timezone.utc).isoformat()
+    errors = []
+    items = []
+
+    for i in range(3):
+        try:
+            uuid_data = fetch_uuid()
+
+            if isinstance(uuid_data, dict) and "error" in uuid_data:
+                errors.append({"stage": "fetch", "item": i, "error": uuid_data["error"]})
+                continue
+
+            original = str(uuid_data)
+
+            enrichment = enrich_with_llm(original)
+            analysis = enrichment.get("analysis", "")
+            sentiment = enrichment.get("sentiment", "balanced")
+
+            timestamp = datetime.now(timezone.utc).isoformat()
+
+            store_result(req.source, original, analysis, sentiment, timestamp)
+
+            items.append({
+                "original": original,
+                "analysis": analysis,
+                "sentiment": sentiment,
+                "stored": True,
+                "timestamp": timestamp
+            })
+
+        except Exception as e:
+            errors.append({"stage": "processing", "item": i, "error": str(e)})
+
+    # Notification simulation
+    print(f"Notification sent to: {req.email}")
+
+    return {
+        "items": items,
+        "notificationSent": True,
+        "processedAt": processed_at,
+        "errors": errors
+    }
