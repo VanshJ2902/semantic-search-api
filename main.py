@@ -11,6 +11,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Semantic Search with Reranking")
 
+@app.get("/")
+def root():
+    return {"status": "ok"}
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
