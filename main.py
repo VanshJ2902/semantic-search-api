@@ -536,6 +536,9 @@ def cache_main(req: CacheRequest):
     }
 
 @app.get("/analytics")
+@app.get("/analytics/")
+def analytics():
+
 def analytics():
     hit_rate = 0
     if TOTAL_REQUESTS > 0:
