@@ -672,6 +672,15 @@ def stream_endpoint(req: StreamRequest):
                 "    return res.status(200).json(response);\n  } catch (err) {\n    return res.status(500).json({ error: 'Internal server error' });\n  }\n});\n\n",
                 "app.use((req, res) => {\n  res.status(404).json({ error: 'Route not found' });\n});\n\n",
                 "app.listen(3000, () => {\n  console.log('Server running on port 3000');\n});\n",
+                 "const rateLimit = require('express-rate-limit');\n\n",
+                "const limiter = rateLimit({\n  windowMs: 15 * 60 * 1000,\n  max: 100,\n  message: { error: 'Too many requests, try again later.' }\n});\n\n",
+                "app.use(limiter);\n\n",
+                "app.get('/api/health', (req, res) => {\n  res.json({ status: 'ok', uptime: process.uptime() });\n});\n\n",
+                "async function fakeDatabaseSave(data) {\n  return new Promise((resolve) => {\n    setTimeout(() => resolve({ saved: true, data }), 200);\n  });\n}\n\n",
+                "app.post('/api/save', async (req, res) => {\n  try {\n    const { title, content } = req.body;\n\n",
+                "    if (!title || title.length < 3) {\n      return res.status(400).json({ error: 'Title too short' });\n    }\n\n",
+                "    if (!content || content.length < 10) {\n      return res.status(400).json({ error: 'Content too short' });\n    }\n\n",
+                "    const result = await fakeDatabaseSave({ title, content });\n    return res.status(201).json({ message: 'Saved successfully', result });\n  } catch (err) {\n    return res.status(500).json({ error: 'Failed to save data' });\n  }\n});\n\n",
                 "```\n\n",
                 "This API validates input, returns proper HTTP codes, and handles errors safely.\n"
             ]
