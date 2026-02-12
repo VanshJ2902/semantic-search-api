@@ -7,8 +7,12 @@ import numpy as np
 from fastapi import FastAPI
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from fastapi.middleware.cors import CORSMiddleware
+
 
 from fastapi.middleware.cors import CORSMiddleware
+app = FastAPI(title="Semantic Search with Reranking")
+
 
 app.add_middleware(
     CORSMiddleware,
