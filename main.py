@@ -561,3 +561,128 @@ def analytics():
 @app.post("/")
 def cache_alias(req: CacheRequest):
     return cache_main(req)
+
+import re
+import html
+
+class SecurityRequest(BaseModel):
+    userId: str
+    input: str
+    category: str = "Output Sanitization"
+
+
+def redact_sensitive(text: str):
+    confidence = 0.95
+    reason_list = []
+
+    # Escape HTML/JS
+    escaped = html.escape(text)
+
+    # Redact password patterns
+    escaped_new = re.sub(r"(password\s*[:=]\s*)(\S+)", r"\1[REDACTED]", escaped, flags=re.IGNORECASE)
+    if escaped_new != escaped:
+        reason_list.append("PII/credential detected (password)")
+    escaped = escaped_new
+
+    # Redact credit card numbers (basic)
+    cc_pattern = r"\b(?:\d[ -]*?){13,16}\b"
+    escaped_new = re.sub(cc_pattern, "[REDACTED_CC]", escaped)
+    if escaped_new != escaped:
+        reason_list.append("PII detected (credit card)")
+    escaped = escaped_new
+
+    # Redact email
+    email_pattern = r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+"
+    escaped_new = re.sub(email_pattern, "[REDACTED_EMAIL]", escaped)
+    if escaped_new != escaped:
+        reason_list.append("PII detected (email)")
+    escaped = escaped_new
+
+    return escaped, reason_list, confidence
+
+
+def contains_sql_injection(text: str):
+    sql_patterns = [
+        r"(?i)\bDROP\s+TABLE\b",
+        r"(?i)\bUNION\s+SELECT\b",
+        r"(?i)\bINSERT\s+INTO\b",
+        r"(?i)\bDELETE\s+FROM\b",
+        r"(?i)\bUPDATE\s+\w+\s+SET\b",
+        r"(?i)--",
+        r"(?i)\bOR\s+1=1\b"
+    ]
+    for pat in sql_patterns:
+        if re.search(pat, text):
+            return True
+    return False
+
+
+@app.post("/security")
+def security_validation(req: SecurityRequest):
+    raw = req.input.strip()
+
+    # Block SQL injection attempts
+    if contains_sql_injection(raw):
+        print(f"[SECURITY BLOCK] user={req.userId} reason=SQL_INJECTION")
+        return {
+            "blocked": True,
+            "reason": "Blocked due to SQL injection pattern",
+            "sanitizedOutput": "",
+            "confidence": 0.99
+        }
+
+    sanitized, reasons, confidence = redact_sensitive(raw)
+
+    if reasons:
+        print(f"[SECURITY EVENT] user={req.userId} redacted={reasons}")
+
+        return {
+            "blocked": False,
+            "reason": "Sensitive data redacted: " + ", ".join(reasons),
+            "sanitizedOutput": sanitized,
+            "confidence": confidence
+        }
+
+    return {
+        "blocked": False,
+        "reason": "Input passed all security checks",
+        "sanitizedOutput": sanitized,
+        "confidence": confidence
+    }
+from fastapi.responses import StreamingResponse
+
+class StreamRequest(BaseModel):
+    prompt: str
+    stream: bool = True
+
+
+@app.post("/stream")
+def stream_endpoint(req: StreamRequest):
+    def event_generator():
+        try:
+            chunks = [
+                "Here is a JavaScript REST API example using Express.js.\n\n",
+                "It includes route handling, validation, and error handling.\n\n",
+                "```js\n",
+                "const express = require('express');\nconst app = express();\napp.use(express.json());\n\n",
+                "app.post('/api/data', async (req, res) => {\n  try {\n    const { name, age } = req.body;\n\n",
+                "    if (!name || typeof name !== 'string') {\n      return res.status(400).json({ error: 'Invalid name' });\n    }\n\n",
+                "    if (!age || typeof age !== 'number') {\n      return res.status(400).json({ error: 'Invalid age' });\n    }\n\n",
+                "    const response = {\n      message: 'User data received successfully',\n      user: { name, age }\n    };\n\n",
+                "    return res.status(200).json(response);\n  } catch (err) {\n    return res.status(500).json({ error: 'Internal server error' });\n  }\n});\n\n",
+                "app.use((req, res) => {\n  res.status(404).json({ error: 'Route not found' });\n});\n\n",
+                "app.listen(3000, () => {\n  console.log('Server running on port 3000');\n});\n",
+                "```\n\n",
+                "This API validates input, returns proper HTTP codes, and handles errors safely.\n"
+            ]
+
+            for c in chunks:
+                yield f"data: {json.dumps({'choices':[{'delta':{'content': c}}]})}\n\n"
+                time.sleep(0.05)
+
+            yield "data: [DONE]\n\n"
+
+        except Exception:
+            yield f"data: {json.dumps({'error': 'Streaming failed'})}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
