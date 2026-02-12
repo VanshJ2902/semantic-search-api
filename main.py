@@ -19,7 +19,10 @@ app = FastAPI(title="Semantic Search with Reranking")
 
 @app.get("/")
 def root():
-    return {"status": "ok"}
+    start = time.time()
+    latency = int((time.time() - start) * 1000)
+    return {"status": "ok", "latency": latency}
+
 
 app.add_middleware(
     CORSMiddleware,
