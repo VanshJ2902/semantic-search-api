@@ -10,6 +10,9 @@ from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, timezone
 import sqlite3
+import hashlib
+from collections import OrderedDict
+
 
 
 app = FastAPI(title="Semantic Search with Reranking")
@@ -56,6 +59,22 @@ def init_db():
     conn.commit()
     conn.close()
 
+CACHE_TTL_SECONDS = 24 * 60 * 60
+CACHE_MAX_SIZE = 1500
+SIM_THRESHOLD = 0.95
+
+# Exact match cache: key -> {answer, embedding, created_at, last_used}
+CACHE = OrderedDict()
+
+# Analytics counters
+TOTAL_REQUESTS = 0
+CACHE_HITS = 0
+CACHE_MISSES = 0
+TOTAL_TOKENS = 0
+CACHED_TOKENS = 0
+
+MODEL_COST_PER_1M = 0.50
+AVG_TOKENS_PER_REQUEST = 500
 
 DOCS = []
 DOC_EMBEDDINGS = None
@@ -356,3 +375,186 @@ def pipeline(req: PipelineRequest):
         "processedAt": processed_at,
         "errors": errors
     }
+
+def now_ts():
+    return time.time()
+
+
+def md5_key(text: str):
+    return hashlib.md5(text.encode("utf-8")).hexdigest()
+
+
+def cleanup_cache():
+    """Remove expired items + enforce LRU max size."""
+    global CACHE
+
+    # remove expired
+    expired_keys = []
+    for k, v in CACHE.items():
+        if now_ts() - v["created_at"] > CACHE_TTL_SECONDS:
+            expired_keys.append(k)
+
+    for k in expired_keys:
+        CACHE.pop(k, None)
+
+    # enforce max size (LRU eviction)
+    while len(CACHE) > CACHE_MAX_SIZE:
+        CACHE.popitem(last=False)  # remove oldest
+
+
+def call_llm(query: str):
+    """Call LLM to generate answer"""
+    url = f"{AIPIPE_BASE_URL}/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {AIPIPE_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    prompt = f"""
+You are a helpful FAQ assistant.
+
+Answer this query in a clear concise way:
+{query}
+"""
+
+    payload = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0
+    }
+
+    resp = requests.post(url, headers=headers, json=payload, timeout=20)
+    resp.raise_for_status()
+
+    return resp.json()["choices"][0]["message"]["content"].strip()
+
+class CacheRequest(BaseModel):
+    query: str
+    application: str = "FAQ assistant"
+
+@app.post("/")
+def cache_main(req: CacheRequest):
+    global TOTAL_REQUESTS, CACHE_HITS, CACHE_MISSES
+    global TOTAL_TOKENS, CACHED_TOKENS
+
+    start = time.time()
+    cleanup_cache()
+
+    TOTAL_REQUESTS += 1
+    q = req.query.strip()
+    key = md5_key(q)
+
+    # ---- Exact match caching ----
+    if key in CACHE:
+        CACHE_HITS += 1
+        CACHE.move_to_end(key)  # LRU update
+
+        latency = int((time.time() - start) * 1000)
+
+        CACHED_TOKENS += AVG_TOKENS_PER_REQUEST
+
+        return {
+            "answer": CACHE[key]["answer"],
+            "cached": True,
+            "latency": latency,
+            "cacheKey": key
+        }
+
+    # ---- Semantic caching ----
+    try:
+        q_emb = embed_texts([q])[0]
+
+        best_key = None
+        best_sim = -1
+
+        for ck, cv in CACHE.items():
+            sim = float(np.dot(q_emb, cv["embedding"]) / (
+                np.linalg.norm(q_emb) * np.linalg.norm(cv["embedding"]) + 1e-9
+            ))
+
+            if sim > best_sim:
+                best_sim = sim
+                best_key = ck
+
+        if best_sim >= SIM_THRESHOLD and best_key is not None:
+            CACHE_HITS += 1
+            CACHE.move_to_end(best_key)
+
+            latency = int((time.time() - start) * 1000)
+
+            CACHED_TOKENS += AVG_TOKENS_PER_REQUEST
+
+            return {
+                "answer": CACHE[best_key]["answer"],
+                "cached": True,
+                "latency": latency,
+                "cacheKey": best_key
+            }
+
+    except Exception:
+        pass
+
+    # ---- Cache miss -> call LLM ----
+    CACHE_MISSES += 1
+
+    try:
+        answer = call_llm(q)
+    except Exception as e:
+        return {
+            "answer": f"Error calling model: {str(e)}",
+            "cached": False,
+            "latency": int((time.time() - start) * 1000),
+            "cacheKey": key
+        }
+
+    # Store embedding for semantic cache
+    try:
+        emb = embed_texts([q])[0]
+    except:
+        emb = np.zeros((1536,), dtype=np.float32)
+
+    CACHE[key] = {
+        "answer": answer,
+        "embedding": emb,
+        "created_at": now_ts()
+    }
+    CACHE.move_to_end(key)
+
+    cleanup_cache()
+
+    latency = int((time.time() - start) * 1000)
+
+    TOTAL_TOKENS += AVG_TOKENS_PER_REQUEST
+
+    return {
+        "answer": answer,
+        "cached": False,
+        "latency": latency,
+        "cacheKey": key
+    }
+
+@app.get("/analytics")
+def analytics():
+    hit_rate = 0
+    if TOTAL_REQUESTS > 0:
+        hit_rate = CACHE_HITS / TOTAL_REQUESTS
+
+    baseline_cost = (TOTAL_REQUESTS * AVG_TOKENS_PER_REQUEST * MODEL_COST_PER_1M) / 1_000_000
+    actual_cost = ((TOTAL_REQUESTS - CACHE_HITS) * AVG_TOKENS_PER_REQUEST * MODEL_COST_PER_1M) / 1_000_000
+
+    savings = baseline_cost - actual_cost
+    savings_percent = 0
+    if baseline_cost > 0:
+        savings_percent = (savings / baseline_cost) * 100
+
+    return {
+        "hitRate": round(hit_rate, 3),
+        "totalRequests": TOTAL_REQUESTS,
+        "cacheHits": CACHE_HITS,
+        "cacheMisses": CACHE_MISSES,
+        "cacheSize": len(CACHE),
+        "costSavings": round(savings, 2),
+        "savingsPercent": round(savings_percent, 2),
+        "strategies": ["exact match", "semantic similarity", "LRU eviction", "TTL expiration"]
+    }
+
