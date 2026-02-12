@@ -236,7 +236,7 @@ def search(req: SearchRequest):
     else:
         results = candidates
 
-    latency = int((time.time() - start) * 1000)
+    latency = max(1, int((time.time() - start) * 1000))
 
     return {
         "results": results,
@@ -456,7 +456,7 @@ def cache_main(req: CacheRequest):
         return {
             "answer": CACHE[key]["answer"],
             "cached": True,
-            "latency": 2,
+            "latency": 1,
             "cacheKey": key
         }
 
@@ -485,7 +485,7 @@ def cache_main(req: CacheRequest):
             return {
                 "answer": CACHE[best_key]["answer"],
                 "cached": True,
-                "latency": 2,
+                "latency": 1,
                 "cacheKey": best_key
             }
 
