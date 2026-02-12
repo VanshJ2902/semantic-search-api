@@ -19,6 +19,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from fastapi import Request
+from fastapi.responses import JSONResponse
+
+@app.options("/{rest_of_path:path}")
+async def preflight_handler(rest_of_path: str, request: Request):
+    return JSONResponse(content={"message": "OK"})
+
 load_dotenv()
 
 AIPIPE_API_KEY = os.getenv("AIPIPE_API_KEY")
