@@ -35,7 +35,6 @@ load_dotenv()
 AIPIPE_API_KEY = os.getenv("AIPIPE_API_KEY")
 AIPIPE_BASE_URL = "https://aipipe.org/openai/v1"
 
-app = FastAPI(title="Semantic Search with Reranking")
 
 DOCS = []
 DOC_EMBEDDINGS = None
