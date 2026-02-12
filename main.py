@@ -495,6 +495,8 @@ def cache_main(req: CacheRequest):
     # ---- Cache miss -> call LLM ----
     CACHE_MISSES += 1
 
+    time.sleep(0.2)
+
     try:
         answer = call_llm(q)
     except Exception as e:
